@@ -386,12 +386,13 @@ feature(
 # ---------------------------------------------------------------- 8. "Charts" in Browse all (soft)
 # Spotify does not always list its Charts page among the browse categories; it is added to the end of the
 # list when none is there. It opens like any other category (browsePage of its page uri).
-CHARTS = '''    // Myspoti AI: the "Charts" category, added when Spotify's list has none.
+CHARTS = '''    // Myspoti AI: the "Charts" category, always the first one (added when Spotify's list has none).
     private suspend fun withCharts(list: List<Category>): List<Category> {
         val id = "0JQ5DAudkNjCgYMM0TZXDw"
-        if (list.any { it.uri.contains(id) || it.title.contains("chart", ignoreCase = true) || it.title.contains("차트") }) return list
+        val isCharts = { c: Category -> c.uri.contains(id) || c.title.contains("chart", ignoreCase = true) || c.title.contains("차트") }
         val title = if (java.util.Locale.getDefault().language == "ko") "차트" else "Charts"
-        return list + Category("spotify:page:" + id, title, emptyList(), "#8D67AB")
+        val charts = list.firstOrNull(isCharts) ?: Category("spotify:page:" + id, title, emptyList(), "#8D67AB")
+        return listOf(charts) + list.filterNot(isCharts)
     }
 
     override suspend fun categories(): List<Category> = withCharts(spotifyCategories())
@@ -403,6 +404,19 @@ feature(
         Option(
             "replace", r"^([ \t]*)override suspend fun categories\(\):[ \t]*List<Category>[ \t]*=",
             lambda m: CHARTS + m.group(1) + "private suspend fun spotifyCategories(): List<Category> =",
+        ),
+    ])],
+)
+
+
+# ---------------------------------------------------------------- 9. no update card at launch (soft)
+# The automatic check at launch is off until it is switched on in Settings (the check button there still works).
+feature(
+    "no-auto-update", "Update check at launch off by default (AutoUpdateCheckPref)", False,
+    [Edit(J + "data/preferences/SettingsPref.kt", [
+        Option(
+            "replace", r'(private const val KEY = "auto_update_check"\s+var on by [^\n]*?getBoolean\(KEY, )true(\))',
+            lambda m: m.group(1) + "false" + m.group(2),
         ),
     ])],
 )
