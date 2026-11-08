@@ -2,7 +2,6 @@
 // New file written for this patch set; see NOTICE.md at the root of the patch repository.
 package com.music.spotui.gemini
 
-import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
@@ -36,17 +35,20 @@ object LyricsAi {
 
     // ---------------------------------------------------------------- settings
 
-    private fun prefs() = Graph.app.getSharedPreferences("myspoti_ai_gemini", Context.MODE_PRIVATE)
+    /** The song whose pronunciation was switched on by hand (the switch is per song, nothing starts by itself). */
+    @Volatile private var pronunciationKey: String? = null
 
-    /** The pronunciation switch of the lyrics menus. */
-    fun pronunciationEnabled(): Boolean = prefs().getBoolean("pronunciation", false)
+    /** What the app's romanization line was before the pronunciation took it over (null: not taken over). */
+    @Volatile var romanizationBefore: Boolean? = null
+
+    private fun currentKey(): String? = runCatching { com.music.spotui.di.SongPlayer.currentLyricsTrack()?.key }.getOrNull()
+
+    /** The pronunciation switch of the lyrics menus: on for the song that is playing, when it was switched on for it. */
+    fun pronunciationEnabled(): Boolean = pronunciationKey?.let { it == currentKey() } == true
 
     fun setPronunciationEnabled(on: Boolean) {
-        prefs().edit().putBoolean("pronunciation", on).apply()
+        pronunciationKey = if (on) currentKey() else null
     }
-
-    /** Switch on and a key to work with: the lyrics code asks Gemini only then. */
-    fun pronunciationOn(): Boolean = pronunciationEnabled() && GeminiKeyStore.has()
 
     // ---------------------------------------------------------------- which lines
 
@@ -137,7 +139,9 @@ object LyricsAi {
         if (trackKey == null || !GeminiKeyStore.has()) return null
         val wanted = lines.indices.filter { translatable(lines[it], target) }
         if (wanted.isEmpty()) return null
-        val outcome = generate("tr.${target.lowercase(Locale.ROOT)}", trackKey, lines, wanted, translationPrompt(target, style), force)
+        // Thinking: none for the literal and balanced styles, a little for the free one (it recasts the lines).
+        val thinking = if (style == TranslationStyle.FREE) 512 else 0
+        val outcome = generate("tr.${target.lowercase(Locale.ROOT)}", trackKey, lines, wanted, translationPrompt(target, style), force, thinking)
         outcome.error?.let { toast(it) }
         if (outcome.values.isEmpty()) return null
         val missing = wanted.filter { it !in outcome.values }
@@ -190,7 +194,7 @@ object LyricsAi {
 
     /** Hangul readings of [wanted] lines of [lines], by line index (kept per song). */
     fun pronounce(trackKey: String, lines: List<String>, wanted: List<Int>): Outcome =
-        generate(FIELD_PRONUNCIATION, trackKey, lines, wanted, PRONUNCIATION_PROMPT, force = false)
+        generate(FIELD_PRONUNCIATION, trackKey, lines, wanted, PRONUNCIATION_PROMPT, force = false, thinking = 0)
 
     private val PRONUNCIATION_PROMPT = """
         You write how song lyrics sound when they are sung, spelled in Hangul, for Korean readers who sing along.
@@ -210,6 +214,8 @@ object LyricsAi {
     /**
      * Makes [wanted] lines under [field] of the song's cache file. What is already kept is used (unless
      * [force]); the rest is asked in chunks, a second time for lines the model skipped.
+     * The lock is held only while the cache file is read or written, never while Gemini is asked, so a
+     * translation and a pronunciation of the same song do not wait for each other.
      */
     private fun generate(
         field: String,
@@ -218,49 +224,62 @@ object LyricsAi {
         wanted: List<Int>,
         system: String,
         force: Boolean,
+        thinking: Int,
     ): Outcome {
         val result = LinkedHashMap<Int, String>()
         if (wanted.isEmpty()) return Outcome(result, null)
-        lock.lock()
-        try {
-            val file = cacheFile(trackKey, lines)
-            val root = readJson(file)
-            val kept = if (force) JSONObject() else root.optJSONObject(field) ?: JSONObject()
-            for (i in wanted) {
-                val value = kept.optString(i.toString(), "")
-                if (value.isNotBlank()) result[i] = value
-            }
-            var todo = wanted.filter { it !in result }
-            if (todo.isEmpty()) {
-                file.setLastModified(System.currentTimeMillis())
-                return Outcome(result, null)
-            }
-            val apiKey = GeminiKeyStore.get() ?: return Outcome(result, GeminiException(GeminiException.Kind.NO_KEY))
-            var error: GeminiException? = null
-            var changed = false
-            for (pass in 0 until 2) {
-                if (todo.isEmpty()) break
-                try {
-                    for (chunk in todo.chunked(CHUNK)) {
-                        val answer = GeminiClient.ask(apiKey, system, chunk.map { it to lines[it].trim() })
-                        for ((i, value) in answer) {
-                            result[i] = value
-                            kept.put(i.toString(), value)
-                            changed = true
-                        }
-                    }
-                } catch (e: GeminiException) {
-                    error = e
-                    break
+        val file = cacheFile(trackKey, lines)
+        if (!force) {
+            locked {
+                val kept = readJson(file).optJSONObject(field) ?: JSONObject()
+                for (i in wanted) {
+                    val value = kept.optString(i.toString(), "")
+                    if (value.isNotBlank()) result[i] = value
                 }
-                todo = wanted.filter { it !in result }
             }
-            if (changed) {
+        }
+        var todo = wanted.filter { it !in result }
+        if (todo.isEmpty()) {
+            locked { file.setLastModified(System.currentTimeMillis()) }
+            return Outcome(result, null)
+        }
+        val apiKey = GeminiKeyStore.get() ?: return Outcome(result, GeminiException(GeminiException.Kind.NO_KEY))
+        val made = LinkedHashMap<Int, String>()
+        var error: GeminiException? = null
+        for (pass in 0 until 2) {
+            if (todo.isEmpty()) break
+            try {
+                for (chunk in todo.chunked(CHUNK)) {
+                    val answer = GeminiClient.ask(apiKey, system, chunk.map { it to lines[it].trim() }, thinking)
+                    for ((i, value) in answer) {
+                        result[i] = value
+                        made[i] = value
+                    }
+                }
+            } catch (e: GeminiException) {
+                error = e
+                break
+            }
+            todo = wanted.filter { it !in result }
+        }
+        if (made.isNotEmpty()) {
+            // Read again here: another request may have saved its own lines of this song meanwhile.
+            locked {
+                val root = readJson(file)
+                val kept = root.optJSONObject(field) ?: JSONObject()
+                for ((i, value) in made) kept.put(i.toString(), value)
                 root.put(field, kept)
                 writeJson(file, root)
                 trim(file.parentFile)
             }
-            return Outcome(result, error)
+        }
+        return Outcome(result, error)
+    }
+
+    private inline fun <T> locked(block: () -> T): T {
+        lock.lock()
+        try {
+            return block()
         } finally {
             lock.unlock()
         }

@@ -36,7 +36,7 @@ object GeminiClient {
     )
 
     /** Asks [system] about [lines] (index to text) and returns index to answer. Throws [GeminiException]. */
-    fun ask(apiKey: String, system: String, lines: List<Pair<Int, String>>): Map<Int, String> {
+    fun ask(apiKey: String, system: String, lines: List<Pair<Int, String>>, thinking: Int = 0): Map<Int, String> {
         try {
             com.music.spotui.data.DataSaver.check()
         } catch (e: Exception) {
@@ -49,7 +49,7 @@ object GeminiClient {
         var last: GeminiException? = null
         for (model in MODELS) {
             try {
-                return parse(call(model, apiKey, system, user), wanted)
+                return parse(callWithThinking(model, apiKey, system, user, thinking), wanted)
             } catch (e: GeminiException) {
                 if (e.kind != GeminiException.Kind.MODEL && e.kind != GeminiException.Kind.QUOTA) throw e
                 last = e
@@ -58,7 +58,22 @@ object GeminiClient {
         throw last ?: GeminiException(GeminiException.Kind.OTHER, "no model answered")
     }
 
-    private fun call(model: String, apiKey: String, system: String, user: String): String {
+    /**
+     * Lyrics need little or no "thinking", and the thinking models spend a long time on it by default.
+     * [thinking] is the token budget (0 = off). A model that refuses the setting is asked again without it.
+     */
+    private fun callWithThinking(model: String, apiKey: String, system: String, user: String, thinking: Int): String =
+        try {
+            call(model, apiKey, system, user, thinking)
+        } catch (e: GeminiException) {
+            if (e.kind == GeminiException.Kind.OTHER && e.message?.contains("thinking") == true) {
+                call(model, apiKey, system, user, null)
+            } else {
+                throw e
+            }
+        }
+
+    private fun call(model: String, apiKey: String, system: String, user: String, thinking: Int?): String {
         val schema = JSONObject()
             .put("type", "ARRAY")
             .put(
@@ -84,7 +99,8 @@ object GeminiClient {
                 JSONObject()
                     .put("temperature", 0.4)
                     .put("responseMimeType", "application/json")
-                    .put("responseSchema", schema),
+                    .put("responseSchema", schema)
+                    .apply { if (thinking != null) put("thinkingConfig", JSONObject().put("thinkingBudget", thinking)) },
             )
             .toString()
 
@@ -110,7 +126,8 @@ object GeminiClient {
                     code == 404 || code == 503 -> GeminiException.Kind.MODEL
                     else -> GeminiException.Kind.OTHER
                 }
-                throw GeminiException(kind, "HTTP $code")
+                val why = if (kind == GeminiException.Kind.OTHER && detail.contains("thinking", ignoreCase = true)) " thinking" else ""
+                throw GeminiException(kind, "HTTP $code$why")
             }
             val text = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
             return answerText(text)
