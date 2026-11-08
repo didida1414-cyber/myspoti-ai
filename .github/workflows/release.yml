@@ -1,0 +1,188 @@
+# Myspoti AI: the newest release of kota-zo/myspoti + the patch set of this repository, signed, published as a
+# release here. The app's update check (Settings, and at launch) reads the releases of this repository.
+#
+#   every day         a new Myspoti release that has no build here yet -> build and publish it
+#   Run workflow      build now (the first build; or a Myspoti tag of your choice)
+#   push to main      the patch set changed -> a new build (-ai.N+1) of the latest Myspoti release
+#
+# A build that fails publishes nothing and tells nobody (no issue, no mail from this workflow): the phones keep
+# the version they have, and the next daily run tries again. The log of the run says what happened.
+#
+# Myspoti AI patch set, built on Myspoti (https://github.com/kota-zo/myspoti), GPL-3.0.
+name: Build Myspoti AI
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: "Myspoti tag to build, like v2.4.0 (empty = its latest release)"
+        required: false
+        default: ""
+      force:
+        description: "Build even if this Myspoti version already has a build here"
+        type: boolean
+        default: false
+  push:
+    branches: [main, master]
+    paths:
+      - "overlay/**"
+      - "patches/**"
+      - "scripts/**"
+      - "ai.json"
+      - ".github/workflows/release.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-myspoti-ai
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # GitHub switches scheduled workflows off after 60 days without activity in the repository. An empty
+      # commit now and then (it starts no other build) keeps the daily check alive.
+      - name: Keep the schedule alive
+        if: github.event_name == 'schedule'
+        run: |
+          LAST="$(git log -1 --format=%ct)"
+          if [ $(( $(date +%s) - LAST )) -gt $(( 45 * 86400 )) ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "chore: keep the scheduled build alive"
+            git push
+          fi
+
+      - name: Plan
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          WANTED_TAG: ${{ inputs.upstream_tag }}
+          FORCE: ${{ inputs.force }}
+          HAS_KEY: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        run: |
+          set -euo pipefail
+          UP="$(jq -r .upstream ai.json)"
+          SUFFIX="$(jq -r .tagSuffix ai.json)"
+          TAG="$WANTED_TAG"
+          [ -n "$TAG" ] || TAG="$(gh api "repos/$UP/releases/latest" --jq .tag_name)"
+          VER="${TAG#v}"
+          if ! [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "::error::Unexpected Myspoti version: $TAG"; exit 1; fi
+          EXISTING="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' | grep -c "^v${VER}-${SUFFIX}\." || true)"
+          BUILD=false
+          case "$EVENT" in
+            push) BUILD=true ;;
+            workflow_dispatch) if [ "$EXISTING" -eq 0 ] || [ "$FORCE" = "true" ]; then BUILD=true; fi ;;
+            schedule) if [ "$EXISTING" -eq 0 ]; then BUILD=true; fi ;;
+          esac
+          if [ "$BUILD" = "true" ] && [ "$HAS_KEY" != "true" ]; then
+            echo "::warning::The signing key secrets are not set (see docs/SETUP.md): nothing was built."
+            BUILD=false
+          fi
+          echo "Myspoti $TAG, builds here so far: $EXISTING, build: $BUILD"
+          {
+            echo "up=$UP"; echo "tag=$TAG"; echo "ver=$VER"; echo "build=$BUILD"
+            echo "full=${VER}-${SUFFIX}.$((EXISTING + 1))"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v6
+        if: steps.plan.outputs.build == 'true'
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: android-actions/setup-android@v4
+        if: steps.plan.outputs.build == 'true'
+        with:
+          packages: "platforms;android-37.0 build-tools;36.0.0"
+
+      - uses: gradle/actions/setup-gradle@v6
+        if: steps.plan.outputs.build == 'true'
+
+      - name: Signing key
+        if: steps.plan.outputs.build == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+
+      # Patch and build. When the build does not compile with the fine volume, it is built once more without it
+      # (the one feature that reaches deep into the player). Anything else that fails stops here.
+      - name: Patch and build
+        if: steps.plan.outputs.build == 'true'
+        env:
+          UP: ${{ steps.plan.outputs.up }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          FULL: ${{ steps.plan.outputs.full }}
+          MYSPOTI_KEYSTORE: ${{ runner.temp }}/release.jks
+          MYSPOTI_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          MYSPOTI_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          MYSPOTI_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -uo pipefail
+          attempt() {  # $1: extra arguments for apply.py
+            rm -rf upstream
+            git clone --depth 1 --branch "$TAG" "https://github.com/$UP.git" upstream || return 10
+            python3 patches/apply.py upstream --report patch-report.md $1 || return 11
+            ( cd upstream/base && chmod +x gradlew && ./gradlew --no-daemon assembleRelease :app:collectApks \
+                -PappVersionName="$FULL" -PappVersionCode="$(( $(date +%s) / 60 ))" -PupdateRepo="$GITHUB_REPOSITORY" ) || return 12
+            return 0
+          }
+          attempt ""
+          RC=$?
+          if [ $RC -eq 12 ] && grep -qx volume upstream/ai-applied.txt; then
+            echo "::warning::Did not compile with the fine volume: building again without it."
+            cp patch-report.md first-report.md
+            attempt "--without volume"
+            RC=$?
+            if [ $RC -eq 0 ]; then echo "VOLUME_DROPPED=true" >> "$GITHUB_ENV"; fi
+          fi
+          exit $RC
+
+      - name: Check the APK (package, version, name)
+        if: steps.plan.outputs.build == 'true'
+        run: |
+          AAPT2="$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | tail -1)"
+          APK="$(ls upstream/base/app/build/release-apks/*-ARMv8.apk)"
+          "$AAPT2" dump badging "$APK" | grep -E "^package:|application-label:" | tee badging.txt
+          grep -q "name='$(jq -r .applicationId ai.json)'" badging.txt || { echo "::error::wrong package name"; exit 1; }
+          grep -q "versionName='${{ steps.plan.outputs.full }}'" badging.txt || { echo "::error::wrong version"; exit 1; }
+          ls upstream/base/app/build/release-apks/
+
+      # GPL-3.0: whoever gets the APK can get the exact source it was built from.
+      - name: Source archive
+        if: steps.plan.outputs.build == 'true'
+        run: |
+          S="Myspoti-AI-${{ steps.plan.outputs.full }}-source.zip"
+          zip -qr "$S" upstream -x 'upstream/.git/*' 'upstream/base/*/build/*' 'upstream/base/.gradle/*' 'upstream/base/build/*'
+          zip -qr "$S" overlay patches scripts ai.json .github LICENSE README.md NOTICE.md docs
+
+      - name: Release
+        if: steps.plan.outputs.build == 'true'
+        run: |
+          FULL="${{ steps.plan.outputs.full }}"; VER="${{ steps.plan.outputs.ver }}"
+          {
+            echo "Myspoti ${VER} + AI (Gemini translation, AI pronunciation, fine volume, Korean)."
+            if [ "${VOLUME_DROPPED:-}" = "true" ]; then
+              echo
+              echo "This build has NO fine volume: it did not fit this Myspoti version."
+            fi
+            if grep -q "Left out of this build" patch-report.md; then
+              echo
+              echo "Left out of this build:"
+              sed -n '/Left out of this build/,$p' patch-report.md | grep '^- '
+            fi
+            echo
+            awk -v v="$VER" '$0 == "## " v {f=1; next} /^## / && f {exit} f' upstream/CHANGELOG.md
+          } > notes.md
+          R=upstream/base/app/build/release-apks
+          gh release create "v$FULL" "$R/Myspoti-$FULL-ARMv8.apk" "$R/Myspoti-$FULL-ARMv7.apk" "$R/Myspoti-$FULL-universal.apk" \
+            "Myspoti-AI-$FULL-source.zip" --title "Myspoti AI $FULL" --notes-file notes.md

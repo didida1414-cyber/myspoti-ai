@@ -1,0 +1,6 @@
+{
+  "upstream": "kota-zo/myspoti",
+  "applicationId": "app.myspoti.ai",
+  "appLabel": "Myspoti AI",
+  "tagSuffix": "ai"
+}

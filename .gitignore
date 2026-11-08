@@ -1,0 +1,5 @@
+# Never commit a signing key or its secrets: the repository is public.
+*.jks
+*.keystore
+signing-secrets.txt
+keystore.properties

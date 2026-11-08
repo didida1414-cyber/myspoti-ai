@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Myspoti AI patch set (GPL-3.0). English; Korean is in values-ko, other languages fall back to this. -->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
+    <string name="gemini_menu_pronunciation">AI pronunciation</string>
+    <string name="gemini_menu_regenerate">Translate this song again with AI</string>
+    <string name="gemini_menu_key">Gemini API key</string>
+
+    <string name="gemini_key_title">Gemini API key</string>
+    <string name="gemini_key_help">Paste a key from Google AI Studio. It is kept on this phone only (encrypted) and sent to Google only to translate lyrics.</string>
+    <string name="gemini_key_label">API key</string>
+    <string name="gemini_key_status_saved">A key is saved. Paste a new one to replace it.</string>
+    <string name="gemini_key_status_none">No key saved.</string>
+    <string name="gemini_key_save">Save</string>
+    <string name="gemini_key_delete">Delete key</string>
+    <string name="gemini_close">Close</string>
+    <string name="gemini_key_saved_toast">Key saved</string>
+    <string name="gemini_key_not_saved_toast">This phone could not save the key</string>
+    <string name="gemini_key_deleted_toast">Key deleted</string>
+
+    <string name="gemini_style_title">Translation style</string>
+    <string name="gemini_style_literal">Literal</string>
+    <string name="gemini_style_literal_hint">Follows the original words and structure closely.</string>
+    <string name="gemini_style_balanced">Balanced</string>
+    <string name="gemini_style_balanced_hint">Faithful to the meaning, in natural words.</string>
+    <string name="gemini_style_free">Free</string>
+    <string name="gemini_style_free_hint">Carries the feeling, like a lyricist would write it.</string>
+
+    <string name="gemini_regenerate_started">Translating with Gemini…</string>
+    <string name="gemini_error_no_key">Add your Gemini API key first (lyrics menu).</string>
+    <string name="gemini_error_key">Gemini refused the key. Check it in the lyrics menu.</string>
+    <string name="gemini_error_quota">Gemini\'s free quota is used up for now. Try again later.</string>
+    <string name="gemini_error_network">Could not reach Gemini. Check the connection.</string>
+    <string name="gemini_error_other">Gemini could not answer this time.</string>
+</resources>
