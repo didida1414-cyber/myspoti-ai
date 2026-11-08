@@ -120,16 +120,26 @@ feature(
 # ---------------------------------------------------------------- 2. translate again, AI pronunciation switch (LyricsViewModel)
 VM_METHODS = '''    // Myspoti AI: Gemini translation styles and pronunciation.
 
-    /** The "AI pronunciation" switch of the lyrics menus. */
+    /** The "AI pronunciation" switch of the lyrics menus: this song only, and only when asked for by hand. */
     fun setAiPronunciation(on: Boolean) {
-        com.music.spotui.gemini.LyricsAi.setPronunciationEnabled(on)
-        if (!on) return
+        val app = com.music.spotui.di.Graph.app
+        if (!on) {
+            com.music.spotui.gemini.LyricsAi.setPronunciationEnabled(false)
+            // The romanization line goes back to what it was before the readings took it over.
+            com.music.spotui.gemini.LyricsAi.romanizationBefore?.let { com.music.spotui.data.preferences.LyricsRomanizationPref.set(app, it) }
+            com.music.spotui.gemini.LyricsAi.romanizationBefore = null
+            return
+        }
         if (!com.music.spotui.gemini.GeminiKeyStore.has()) {
             com.music.spotui.gemini.LyricsAi.toast(app.myspoti.engine.R.string.gemini_error_no_key)
             return
         }
+        com.music.spotui.gemini.LyricsAi.setPronunciationEnabled(true)
         // The readings are shown in the romanization line: turn that on too.
-        com.music.spotui.data.preferences.LyricsRomanizationPref.set(com.music.spotui.di.Graph.app, true)
+        if (com.music.spotui.gemini.LyricsAi.romanizationBefore == null) {
+            com.music.spotui.gemini.LyricsAi.romanizationBefore = com.music.spotui.data.preferences.LyricsRomanizationPref.on
+        }
+        com.music.spotui.data.preferences.LyricsRomanizationPref.set(app, true)
         com.music.spotui.di.SongPlayer.currentLyricsTrack()?.let { LyricsApi.pronounceAgain(it) }
     }
 
@@ -209,29 +219,12 @@ API_METHODS = '''    // Myspoti AI: Hangul pronunciation by Gemini, put in the r
 '''
 
 
-def pronounce_call(track, lyrics, indent="        "):
-    return (
-        f"{indent}// Myspoti AI: with Gemini pronunciation on, the readings come from Gemini (in Hangul).\n"
-        f"{indent}if (com.music.spotui.gemini.LyricsAi.pronunciationOn()) {{\n"
-        f"{indent}    pronounceLater({track}, {lyrics})\n"
-        f"{indent}    return\n"
-        f"{indent}}}\n"
-    )
-
-
 feature(
-    "pronounce", "AI pronunciation (LyricsApi.romanizeLater)", True,
+    "pronounce", "AI pronunciation, started by the menu switch (LyricsApi)", True,
     [
         Edit(J + "data/api/LyricsApi.kt", [
             Option("after", r"^(?:internal\s+)?object LyricsApi\b[^{\n]*\{[ \t]*\n", API_METHODS),
         ], name="methods"),
-        Edit(J + "data/api/LyricsApi.kt", [
-            Option("before", exact("        val wanted = LyricsRomanize.wanted(lyrics)\n"), pronounce_call("track", "lyrics")),
-            Option(
-                "after", r"^[ \t]*private fun romanizeLater\(\s*(\w+): Track,\s*(\w+): Lyrics\s*\)\s*\{[ \t]*\n",
-                lambda m: pronounce_call(m.group(1), m.group(2)),
-            ),
-        ], name="call"),
     ],
 )
 
@@ -387,6 +380,31 @@ feature(
         ], name="devices sheet row"),
     ],
     overlay="volume",
+)
+
+
+# ---------------------------------------------------------------- 8. "Charts" in Browse all (soft)
+# Spotify does not always list its Charts page among the browse categories; it is added to the end of the
+# list when none is there. It opens like any other category (browsePage of its page uri).
+CHARTS = '''    // Myspoti AI: the "Charts" category, added when Spotify's list has none.
+    private suspend fun withCharts(list: List<Category>): List<Category> {
+        val id = "0JQ5DAudkNjCgYMM0TZXDw"
+        if (list.any { it.uri.contains(id) || it.title.contains("chart", ignoreCase = true) || it.title.contains("차트") }) return list
+        val title = if (java.util.Locale.getDefault().language == "ko") "차트" else "Charts"
+        return list + Category("spotify:page:" + id, title, emptyList(), "#8D67AB")
+    }
+
+    override suspend fun categories(): List<Category> = withCharts(spotifyCategories())
+
+'''
+feature(
+    "charts", "Charts category in Browse all (SpotifyHome.categories)", False,
+    [Edit("api-spotify/src/main/kotlin/app/myspoti/spotify/SpotifyMore.kt", [
+        Option(
+            "replace", r"^([ \t]*)override suspend fun categories\(\):[ \t]*List<Category>[ \t]*=",
+            lambda m: CHARTS + m.group(1) + "private suspend fun spotifyCategories(): List<Category> =",
+        ),
+    ])],
 )
 
 
