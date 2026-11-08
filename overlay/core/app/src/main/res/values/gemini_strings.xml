@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Myspoti AI patch set (GPL-3.0). English; Korean is in values-ko, other languages fall back to this. -->
 <resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
+    <string name="gemini_menu_translate">AI lyrics translation</string>
     <string name="gemini_menu_pronunciation">AI pronunciation</string>
-    <string name="gemini_menu_regenerate">Translate this song again with AI</string>
+    <string name="gemini_menu_regenerate">Regenerate AI lyrics</string>
     <string name="gemini_menu_key">Gemini API key</string>
 
     <string name="gemini_key_title">Gemini API key</string>

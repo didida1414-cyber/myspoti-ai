@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Myspoti AI patch set (GPL-3.0). -->
 <resources>
+    <string name="gemini_menu_translate">AI 가사 번역</string>
     <string name="gemini_menu_pronunciation">AI 발음</string>
-    <string name="gemini_menu_regenerate">AI로 이 곡 다시 번역</string>
+    <string name="gemini_menu_regenerate">AI 가사 재생성</string>
     <string name="gemini_menu_key">Gemini API 키</string>
 
     <string name="gemini_key_title">Gemini API 키</string>

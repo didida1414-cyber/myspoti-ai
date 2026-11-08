@@ -240,13 +240,19 @@ feature(
     "menu", "Gemini entries in the lyrics menu (Classic)", True,
     [
         Edit(J + "ui/screens/LyricsScreen.kt", [
-            Option("before", exact("        if (canPickSource) DropdownMenuItem(text = { Text(stringResource(R.string.lyrics_other_source)) }, onClick = { onDismiss(); onPickSource() })\n"),
-                   "        com.music.spotui.gemini.GeminiLyricsMenuEntries(canTranslate = canTranslate, onDismiss = onDismiss)\n"),
-            Option("before", r"^[ \t]*if \(canPickSource\) DropdownMenuItem\(",
-                   "        com.music.spotui.gemini.GeminiLyricsMenuEntries(canTranslate = canTranslate, onDismiss = onDismiss)\n"),
-            Option("before", r"^[ \t]*DropdownMenuItem\(text = \{ Text\(stringResource\(R\.string\.lyrics_reload\)\)",
-                   "        com.music.spotui.gemini.GeminiLyricsMenuEntries(canTranslate = canTranslate, onDismiss = onDismiss)\n"),
+            # The AI entries (AI lyrics translation, AI pronunciation, AI lyrics regeneration, key) go first in the menu.
+            Option("before", exact("        // Word by word (karaoke) or line by line: the app then picks the source by itself.\n"),
+                   "        com.music.spotui.gemini.GeminiLyricsMenuEntries(canTranslate = canTranslate, translating = translating, onTranslate = onTranslate, onDismiss = onDismiss)\n"),
+            Option("after", r"^[ \t]*DropdownMenu\(expanded = expanded, onDismissRequest = onDismiss\) \{[ \t]*\n",
+                   "        com.music.spotui.gemini.GeminiLyricsMenuEntries(canTranslate = canTranslate, translating = translating, onTranslate = onTranslate, onDismiss = onDismiss)\n"),
         ], name="entries"),
+        # The app's own "Translate lyrics" item is replaced by the AI one above (its label flipped to "Stop translating").
+        Edit(J + "ui/screens/LyricsScreen.kt", opts("replace",
+            "        if (canTranslate) DropdownMenuItem(\n"
+            "            text = { Text(stringResource(if (translating) R.string.lyrics_fullscreen_translate_button_enabled_readout_value else R.string.lyrics_fullscreen_context_menu_main_page_translate_lyrics_action)) },\n"
+            "            onClick = { onDismiss(); onTranslate() },\n"
+            "        )\n", ""),
+            optional=True, name="hide the app's own translate item"),
         Edit(J + "ui/screens/LyricsScreen.kt", [
             Option("after", exact("        if (sourcesOpen) com.music.spotui.ui.components.LyricsSourceSheet(onDismiss = { sourcesOpen = false }, vm = vm)\n"),
                    "        com.music.spotui.gemini.GeminiDialogHost(vm = vm, targetLanguage = targetLanguage)\n"),

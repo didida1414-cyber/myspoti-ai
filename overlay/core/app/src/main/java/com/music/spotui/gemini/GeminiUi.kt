@@ -68,12 +68,20 @@ fun GeminiDialogHost(vm: LyricsViewModel, targetLanguage: String, onFinished: ()
     }
 }
 
-/** The entries of the Classic lyrics menu (inside its DropdownMenu). */
+/**
+ * The entries of the Classic lyrics menu (inside its DropdownMenu), first in the menu:
+ * AI lyrics translation (a check when it is on), AI pronunciation, AI lyrics regeneration, the key.
+ */
 @Composable
-fun GeminiLyricsMenuEntries(canTranslate: Boolean, onDismiss: () -> Unit) {
+fun GeminiLyricsMenuEntries(canTranslate: Boolean, translating: Boolean, onTranslate: () -> Unit, onDismiss: () -> Unit) {
     // The screen's own view model: the same instance (one per owner), so the menu needs no extra parameter.
     val vm: LyricsViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     var pronunciation by remember { mutableStateOf(LyricsAi.pronunciationEnabled()) }
+    if (canTranslate) DropdownMenuItem(
+        text = { Text(stringResource(R.string.gemini_menu_translate)) },
+        trailingIcon = { if (translating) Icon(Icons.Default.Check, contentDescription = null) },
+        onClick = { onDismiss(); onTranslate() },
+    )
     DropdownMenuItem(
         text = { Text(stringResource(R.string.gemini_menu_pronunciation)) },
         trailingIcon = { if (pronunciation) Icon(Icons.Default.Check, contentDescription = null) },
