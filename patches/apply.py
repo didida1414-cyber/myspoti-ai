@@ -122,11 +122,11 @@ VM_METHODS = '''    // Myspoti AI: Gemini translation styles and pronunciation.
 
     /** The "AI pronunciation" switch of the lyrics menus: this song only, and only when asked for by hand. */
     fun setAiPronunciation(on: Boolean) {
-        val app = com.music.spotui.di.Graph.app
+        val ctx = com.music.spotui.di.Graph.app
         if (!on) {
             com.music.spotui.gemini.LyricsAi.setPronunciationEnabled(false)
             // The romanization line goes back to what it was before the readings took it over.
-            com.music.spotui.gemini.LyricsAi.romanizationBefore?.let { com.music.spotui.data.preferences.LyricsRomanizationPref.set(app, it) }
+            com.music.spotui.gemini.LyricsAi.romanizationBefore?.let { com.music.spotui.data.preferences.LyricsRomanizationPref.set(ctx, it) }
             com.music.spotui.gemini.LyricsAi.romanizationBefore = null
             return
         }
@@ -139,7 +139,7 @@ VM_METHODS = '''    // Myspoti AI: Gemini translation styles and pronunciation.
         if (com.music.spotui.gemini.LyricsAi.romanizationBefore == null) {
             com.music.spotui.gemini.LyricsAi.romanizationBefore = com.music.spotui.data.preferences.LyricsRomanizationPref.on
         }
-        com.music.spotui.data.preferences.LyricsRomanizationPref.set(app, true)
+        com.music.spotui.data.preferences.LyricsRomanizationPref.set(ctx, true)
         com.music.spotui.di.SongPlayer.currentLyricsTrack()?.let { LyricsApi.pronounceAgain(it) }
     }
 
