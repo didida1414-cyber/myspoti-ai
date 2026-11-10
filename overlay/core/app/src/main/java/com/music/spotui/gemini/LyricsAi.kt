@@ -75,6 +75,61 @@ object LyricsAi {
         return line.none { isHangul(it) }
     }
 
+    // ---------------------------------------------------------------- language of the lyrics, from their letters
+
+    private fun isKorean(lang: String?) = lang != null && lang.substringBefore('-').substringBefore('_').equals("ko", ignoreCase = true)
+
+    /** Lines with letters that are not Hangul needed before a Korean song counts as foreign (a lone "yeah" does not). */
+    private const val MIN_FOREIGN_LINES = 2
+
+    /** The language of the letters that are not Hangul in [lines]: kana ja, Han zh, Cyrillic ru, Arabic ar, Thai th, Latin en. */
+    private fun foreignLanguage(lines: List<String>): String {
+        var kana = 0; var han = 0; var cyrillic = 0; var arabic = 0; var thai = 0; var latin = 0; var other = 0
+        for (line in lines) for (ch in line) {
+            if (!ch.isLetter() || isHangul(ch)) continue
+            when (Character.UnicodeScript.of(ch.code)) {
+                Character.UnicodeScript.HIRAGANA, Character.UnicodeScript.KATAKANA -> kana++
+                Character.UnicodeScript.HAN -> han++
+                Character.UnicodeScript.CYRILLIC -> cyrillic++
+                Character.UnicodeScript.ARABIC -> arabic++
+                Character.UnicodeScript.THAI -> thai++
+                Character.UnicodeScript.LATIN -> latin++
+                else -> other++
+            }
+        }
+        val counts = listOf(
+            "ja" to (if (kana > 0) kana + han else 0),
+            "zh" to (if (kana == 0) han else 0),
+            "ru" to cyrillic, "ar" to arabic, "th" to thai, "en" to latin, "und" to other,
+        )
+        return counts.maxByOrNull { it.second }?.takeIf { it.second > 0 }?.first ?: "und"
+    }
+
+    /**
+     * The language the lyrics screen goes by (instead of the one the source labels them with): a song the source
+     * calls Korean that has foreign lines in it, with Korean as the language to read in, is one to translate.
+     * Everything else stays as the source says.
+     */
+    fun sourceLanguage(language: String?, lines: List<String>): String? {
+        if (!GeminiKeyStore.has() || !isKorean(translateTarget())) return language
+        if (language != null && !isKorean(language)) return language
+        if (lines.count { translatable(it, "ko") } < MIN_FOREIGN_LINES) return language
+        return foreignLanguage(lines)
+    }
+
+    private fun translateTarget(): String =
+        com.music.spotui.data.preferences.getLyricTranslateLang(Graph.app).ifBlank { Locale.getDefault().language.ifBlank { "en" } }
+
+    /**
+     * The usual translator asks Google for the language of the first lines. With a Gemini key and Korean to read in,
+     * the letters tell it with no network. Null (not handled, the usual way goes on) otherwise.
+     */
+    fun detectHook(lines: List<String>, target: String): String? {
+        if (!GeminiKeyStore.has() || !isKorean(target)) return null
+        if (lines.count { translatable(it, "ko") } < MIN_FOREIGN_LINES) return target
+        return foreignLanguage(lines)
+    }
+
     // ---------------------------------------------------------------- the hook in LyricTranslate.translateLines
 
     /** Style asked for by "translate this song again", used by the next translation only (expires, see [FRESH_MS]). */
@@ -111,6 +166,7 @@ object LyricsAi {
             nextStyle = null
         }
         inHook.set(true)
+        AiLog.log("translate: ${lines.size} lines to $target, style $style${if (force) ", again" else ""}")
         return try {
             translateForLyrics("", lines, target, null, style, force)
         } catch (e: Exception) {
@@ -250,7 +306,10 @@ object LyricsAi {
             if (todo.isEmpty()) break
             try {
                 for (chunk in todo.chunked(CHUNK)) {
+                    val began = android.os.SystemClock.elapsedRealtime()
+                    AiLog.log("[$field] asking Gemini for ${chunk.size} lines")
                     val answer = GeminiClient.ask(apiKey, system, chunk.map { it to lines[it].trim() }, thinking)
+                    AiLog.log("[$field] answer of ${answer.size} lines in ${android.os.SystemClock.elapsedRealtime() - began} ms")
                     for ((i, value) in answer) {
                         result[i] = value
                         made[i] = value

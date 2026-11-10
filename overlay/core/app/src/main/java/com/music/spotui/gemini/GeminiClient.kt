@@ -48,9 +48,13 @@ object GeminiClient {
         val wanted = lines.map { it.first }.toSet()
         var last: GeminiException? = null
         for (model in MODELS) {
+            val began = android.os.SystemClock.elapsedRealtime()
             try {
-                return parse(callWithThinking(model, apiKey, system, user, thinking), wanted)
+                val answer = parse(callWithThinking(model, apiKey, system, user, thinking), wanted)
+                AiLog.log("model $model answered in ${android.os.SystemClock.elapsedRealtime() - began} ms")
+                return answer
             } catch (e: GeminiException) {
+                AiLog.log("model $model failed after ${android.os.SystemClock.elapsedRealtime() - began} ms: ${e.kind} ${e.message.orEmpty()}")
                 if (e.kind != GeminiException.Kind.MODEL && e.kind != GeminiException.Kind.QUOTA) throw e
                 last = e
             }
