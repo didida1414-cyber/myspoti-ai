@@ -422,6 +422,63 @@ feature(
 )
 
 
+# ---------------------------------------------------------------- 10. language of the lyrics from their letters (soft)
+# Korean lyrics with some foreign lines were taken for "already Korean": no translation. With a Gemini key and
+# Korean to read in, the letters decide, with no network call either (the usual way asks Google first).
+feature(
+    "lang", "Language of the lyrics from their letters (LyricsViewModel.loadedState, LyricTranslate.detectLanguage)", False,
+    [
+        Edit(J + "ui/viewmodel/LyricsViewModel.kt", [Option(
+            "replace", r"\bsourceLanguage = lyrics\.language,",
+            lambda m: "sourceLanguage = com.music.spotui.gemini.LyricsAi.sourceLanguage(lyrics.language, lyrics.lines.map { it.text }),",
+        )], optional=True, name="lyrics language"),
+        Edit(J + "data/api/LyricTranslate.kt", [Option(
+            "after",
+            r"^[ \t]*fun detectLanguage\(\s*(\w+): List<String>,\s*(\w+): String\s*\)[^{\n]*\{[ \t]*\n",
+            lambda m: f"        com.music.spotui.gemini.LyricsAi.detectHook({m.group(1)}, {m.group(2)})?.let {{ return it }}\n",
+        )], optional=True, name="detectLanguage"),
+    ],
+)
+
+
+# ---------------------------------------------------------------- 11. a translation is kept when the lyrics object was replaced (soft)
+# While a translation runs, the pronunciation (or another update) can replace the lyrics object with one of the same
+# lines; the translation was thrown away and the spinner stayed. The same lines are the same song.
+feature(
+    "keep-translation", "Translation kept when the lyrics object is replaced (LyricsViewModel.translate)", False,
+    [Edit(J + "ui/viewmodel/LyricsViewModel.kt", [Option(
+        "replace", r"if \(latest\.lyrics != cur\.lyrics\) return@withContext(\n\s*if \(result == null\) \{)",
+        lambda m: "if (latest.lyrics != cur.lyrics && latest.lyrics.lines.map { it.text } != cur.lyrics.lines.map { it.text }) return@withContext" + m.group(1),
+    )], optional=True, name="result")],
+)
+
+
+# ---------------------------------------------------------------- 12. notes of a translation in the diagnostic report (soft)
+VMF = J + "ui/viewmodel/LyricsViewModel.kt"
+LOGP = "com.music.spotui.gemini.AiLog"
+feature(
+    "log", "Notes of a translation in the diagnostic report (LyricsViewModel.translate)", False,
+    [
+        Edit(VMF, [Option(
+            "after", r"^[ \t]*private fun translate\(\s*\w+: State\.Loaded,\s*\w+: String,\s*\w+: Boolean\s*\)\s*\{[ \t]*\n",
+            f'        {LOGP}.log("translate asked (language of the lyrics: ${{cur.sourceLanguage}})")\n',
+        )], optional=True, name="start"),
+        Edit(VMF, [Option(
+            "before", r"^[ \t]*val result = LyricTranslate\.translateLines\(lines, targetLang\)[ \t]*\n",
+            '            ' + LOGP + '.log("translating ${lines.size} lines")\n',
+        )], optional=True, name="translating"),
+        Edit(VMF, [Option(
+            "after", r"^[ \t]*val result = LyricTranslate\.translateLines\(lines, targetLang\)[ \t]*\n",
+            f'            {LOGP}.log("translation back: ${{if (result == null) "nothing" else "ok"}}")\n',
+        )], optional=True, name="translated"),
+        Edit(VMF, [Option(
+            "replace", r"if \(latest\.lyrics != cur\.lyrics(?: && [^\n]*?)?\) return@withContext(\n\s*if \(result == null\) \{)",
+            lambda m: m.group(0).replace(") return@withContext", f") {{ {LOGP}.log(\"translation thrown away: the lyrics changed\"); return@withContext }}", 1),
+        )], optional=True, name="thrown away"),
+    ],
+)
+
+
 # ------------------------------------------------------------------ Korean text for the strings the original lacks
 
 def write_korean_strings(base):
