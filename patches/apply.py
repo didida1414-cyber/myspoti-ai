@@ -479,6 +479,18 @@ feature(
 )
 
 
+# ---------------------------------------------------------------- 13. Genius meanings stay with the usual translator (soft)
+# The meaning texts are translated paragraph by paragraph, four at a time: through Gemini they used up its
+# per-minute quota while the lyrics were being translated. They go back to the usual translator.
+feature(
+    "meaning-usual", "Genius meanings translated by the usual translator (GeniusMeaning.translateNow)", False,
+    [Edit(J + "data/api/GeniusMeaning.kt", [Option(
+        "replace", r"LyricTranslate\.translateLines\(([^\n]*?)\)([ \t]*\?: return)",
+        lambda m: "com.music.spotui.gemini.LyricsAi.withoutGemini { LyricTranslate.translateLines(" + m.group(1) + ") }" + m.group(2),
+    )], optional=True, name="meaning")],
+)
+
+
 # ------------------------------------------------------------------ Korean text for the strings the original lacks
 
 def write_korean_strings(base):
