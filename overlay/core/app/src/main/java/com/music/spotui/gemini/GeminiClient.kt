@@ -29,11 +29,29 @@ object GeminiClient {
      * when its free quota is used up (quotas are counted per model). Edit here when Google retires one.
      */
     private val MODELS = listOf(
-        "gemini-3.1-flash-lite",
         "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite",
         "gemini-flash-lite-latest",
         "gemini-flash-latest",
     )
+
+    /**
+     * A model that just failed (overloaded, out of quota, refusing the request) goes to the back of the line for a
+     * while, so the next requests do not wait on it again. It is still tried last, when nothing else answers.
+     */
+    private val coolUntil = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private const val COOL_OVERLOADED_MS = 3 * 60_000L
+    private const val COOL_QUOTA_MS = 60_000L
+    private const val COOL_REFUSED_MS = 10 * 60_000L
+
+    private fun modelsInOrder(): List<String> {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val (ready, cooling) = MODELS.partition { (coolUntil[it] ?: 0L) <= now }
+        return ready + cooling
+    }
+
+    /** The request itself was refused (HTTP 400) by this model: the next model may take it. */
+    private fun refused(e: GeminiException) = e.kind == GeminiException.Kind.OTHER && e.message?.startsWith("HTTP 400") == true
 
     /** Asks [system] about [lines] (index to text) and returns index to answer. Throws [GeminiException]. */
     fun ask(apiKey: String, system: String, lines: List<Pair<Int, String>>, thinking: Int = 0): Map<Int, String> {
@@ -47,15 +65,22 @@ object GeminiClient {
         val user = "Lines of one song, as a JSON array of {\"i\": line index, \"t\": lyric line}:\n$input"
         val wanted = lines.map { it.first }.toSet()
         var last: GeminiException? = null
-        for (model in MODELS) {
+        for (model in modelsInOrder()) {
             val began = android.os.SystemClock.elapsedRealtime()
             try {
                 val answer = parse(callWithThinking(model, apiKey, system, user, thinking), wanted)
                 AiLog.log("model $model answered in ${android.os.SystemClock.elapsedRealtime() - began} ms")
+                coolUntil.remove(model)
                 return answer
             } catch (e: GeminiException) {
                 AiLog.log("model $model failed after ${android.os.SystemClock.elapsedRealtime() - began} ms: ${e.kind} ${e.message.orEmpty()}")
-                if (e.kind != GeminiException.Kind.MODEL && e.kind != GeminiException.Kind.QUOTA) throw e
+                if (e.kind != GeminiException.Kind.MODEL && e.kind != GeminiException.Kind.QUOTA && !refused(e)) throw e
+                val pause = when {
+                    e.kind == GeminiException.Kind.QUOTA -> COOL_QUOTA_MS
+                    refused(e) -> COOL_REFUSED_MS
+                    else -> COOL_OVERLOADED_MS
+                }
+                coolUntil[model] = android.os.SystemClock.elapsedRealtime() + pause
                 last = e
             }
         }
@@ -70,7 +95,8 @@ object GeminiClient {
         try {
             call(model, apiKey, system, user, thinking)
         } catch (e: GeminiException) {
-            if (e.kind == GeminiException.Kind.OTHER && e.message?.contains("thinking") == true) {
+            if (refused(e)) {
+                // Some models do not take the thinking setting (or not this budget): once more without it.
                 call(model, apiKey, system, user, null)
             } else {
                 throw e
@@ -127,10 +153,11 @@ object GeminiClient {
                         (code == 400 && (detail.contains("API_KEY_INVALID") || detail.contains("API key not valid"))) ->
                         GeminiException.Kind.KEY_INVALID
                     code == 429 || detail.contains("RESOURCE_EXHAUSTED") -> GeminiException.Kind.QUOTA
-                    code == 404 || code == 503 -> GeminiException.Kind.MODEL
+                    code == 404 || code in 500..599 -> GeminiException.Kind.MODEL
                     else -> GeminiException.Kind.OTHER
                 }
-                val why = if (kind == GeminiException.Kind.OTHER && detail.contains("thinking", ignoreCase = true)) " thinking" else ""
+                // What Google says about a refused request goes in the note (the log shows why).
+                val why = if (code == 400) " " + detail.replace(Regex("\\s+"), " ").take(160) else ""
                 throw GeminiException(kind, "HTTP $code$why")
             }
             val text = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }

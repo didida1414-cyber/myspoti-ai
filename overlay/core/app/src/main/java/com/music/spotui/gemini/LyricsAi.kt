@@ -152,6 +152,17 @@ object LyricsAi {
      * Gemini gave nothing), and the usual translator goes on. The usual translator is also Gemini's own
      * fallback for lines it left out, so a call from inside this hook is let through ([inHook]).
      */
+    /** Runs [block] with the usual translator alone (the Genius meaning texts: many small requests, Gemini's quota is for lyrics). */
+    fun <T> withoutGemini(block: () -> T): T {
+        val before = inHook.get() == true
+        inHook.set(true)
+        try {
+            return block()
+        } finally {
+            inHook.set(before)
+        }
+    }
+
     fun translateHook(lines: List<String>, target: String): LyricTranslate.Result? {
         if (inHook.get() == true) return null
         if (!GeminiKeyStore.has()) return null
